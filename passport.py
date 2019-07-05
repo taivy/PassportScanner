@@ -448,6 +448,108 @@ def read_side(image):
     return output
 
 
+def locate_MRZ(image):
+
+    image = image.copy()
+    (H,W) = image.shape[:2]
+    orig = image.copy()
+
+    image = imutils.resize(image, height=600)
+    (h,w) = image.shape[:2]
+
+    kX = W / w
+    kY = H / h
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    rectKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (13, 5))
+    sqKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
+
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, rectKernel)
+
+    gradX = cv2.Sobel(blackhat, ddepth=cv2.CV_32F, dx=1, dy=0, ksize=-1)
+    gradX = np.absolute(gradX)
+    (minVal, maxVal) = (np.min(gradX), np.max(gradX))
+    gradX = (255 * ((gradX - minVal) / (maxVal - minVal))).astype("uint8")
+
+    gradX = cv2.morphologyEx(gradX, cv2.MORPH_CLOSE, rectKernel)
+    thresh = cv2.threshold(gradX, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, sqKernel)
+    thresh = cv2.erode(thresh, None, iterations=4)
+
+    p = int(image.shape[1] * 0.05)
+    thresh[:, 0:p] = 0
+    thresh[:, image.shape[1] - p:] = 0
+
+    cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+
+    for c in cnts:
+
+        (x, y, w, h) = cv2.boundingRect(c)
+        ar = w / float(h)
+        crWidth = w / float(gray.shape[1])
+
+        if ar > 5 and crWidth > 0.75:
+
+            pX = int((x + w) * 0.03)
+            pY = int((y + h) * 0.03)
+            (x, y) = (x - pX, y - pY)
+            (w, h) = (w + (pX * 2), h + (pY * 2))
+
+            roi = image[y:y + h, x:x + w].copy()
+            roi = orig[int(y*kY):int(y*kY + h*kY), int(x*kX):int((x+w)*kX)].copy()
+
+            return roi
+
+
+def parse_mrz(image):
+
+    mrz = locate_MRZ(image)
+
+    if mrz is None:
+        return None
+
+    gray = cv2.cvtColor(mrz, cv2.COLOR_BGR2GRAY)
+
+    text = image_to_string(gray)
+
+    (top, bottom) = text.split('\n')
+    top = top.replace(' ', '')
+    bottom = bottom.replace(' ', '')
+
+    words = [word for word in top.split('<') if len(word) >= 3]
+    if len(words) >= 3:
+        words = words[:3]
+        words[0] = words[0][5:]
+
+    translit = {"L":"Л","O":"О","G":"Г","I":"И","N":"Н","V":"В","A":"А","E":"Е","R":"Р",\
+                "K":"К","S":"С","8":"Я","7":"Ю","3":"Ч","M":"М","Q":"Й","T":"Т","Z":"З",\
+                "Y":"у","F":"Ф","D":"Д","B":"Б",}
+
+    mrz_result = {'surname': '', 'name': '', 'patronymic': '', \
+                'birth_date': '', 'issue_date': '', 'issue_code': '', 'number': '', 'series': '', 'sex': ''}
+
+    mrz_result['surname'] = ''.join([translit[letter] for letter in words[0]])
+    mrz_result['name'] = ''.join([translit[letter] for letter in words[1]])
+    mrz_result['patronymic'] = ''.join([translit[letter] for letter in words[2]])
+
+    mrz_result['birth_date'] = '{}.{}.19{}'.format(bottom[13:19][4:6], bottom[13:19][2:4], bottom[13:19][0:2])
+    mrz_result['sex'] = 'male' if 'M' in bottom else 'female'
+
+    mrz_result['issue_date'] = '{}.{}.20{}'.format(bottom[-15:-9][4:6], bottom[-15:-9][2:4], bottom[-15:-9][0:2])
+    mrz_result['issue_code'] = '{}-{}'.format(bottom[-9:-3][0:3], bottom[-9:-3][3:6])
+
+    mrz_result['series'] = bottom[:2]
+    mrz_result['number'] = bottom[3:9]
+
+    return mrz_result
+
+
 def analyze_passport(passport):
 
     image = passport.copy()
@@ -507,5 +609,10 @@ def analyze_passport(passport):
     ocr_result.update(read_side(image))
 
     result = {'ocr_result': ocr_result, 'cut': image_cut}
+
+    mrz = parse_mrz(image)
+
+    if mrz is not None:
+        result['ocr_result']['mrz'] = mrz
 
     return result['ocr_result']
