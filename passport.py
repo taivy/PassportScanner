@@ -9,7 +9,7 @@ import numpy as np
 from pytesseract import image_to_string
 
 
-def passport_border(image, mode='reading'):
+def passport_border(image):
 
     # Initializing cascade
     #image = cv2.imread(filename)
@@ -26,44 +26,26 @@ def passport_border(image, mode='reading'):
 
         (H, W, _) = image.shape
 
-        if mode == 'reading':
-            # Mode designed to find passport border
-            # as acurate as possible in order to read it
+        if y + 3 * h > H:
+            endY = H
+        else:
+            endY = y + 3 * h
 
-            if y - int(6 * h) < 0:
-                startY = 0
-            else:
-                startY = y - int(6 * h)
+        if x - w < 0:
+            startX = 0
+        else:
+            startX = x - w
 
-            if y + 3 * h > H:
-                endY = H
-            else:
-                endY = y + 3 * h
+        startY = 0
+        endX = W
 
-            if x - w < 0:
-                startX = 0
-            else:
-                startX = x - w
+        mask = np.zeros((H, W), dtype=np.uint8)
+        mask[startY:endY, startX:endX] = 255
 
-            if x + 6 * w > W:
-                endX = W
-            else:
-                endX = x + 6 * w
+        masked = cv2.bitwise_and(image, image, mask=mask)
+        masked = get_segment_crop(image, mask=mask)
 
-            mask = np.zeros((H, W), dtype=np.uint8)
-            mask[startY:endY, startX:endX] = 255
-
-            masked = cv2.bitwise_and(image, image, mask=mask)
-            masked = get_segment_crop(image, mask=mask)
-
-            """
-                cv2.imwrite(os.path.join('output', output + '.png'), masked)
-
-            else:
-                cv2.imwrite(os.path.join('output', output + '.png'), image)
-            """
-
-            return masked
+        return masked
 
     else:
         return image
@@ -93,13 +75,8 @@ def rotate_passport(passport):
         gray = imutils.rotate_bound(gray, 90)
         rotates += 1
 
-    (h, w, _) = passport.shape
-    if w > h:
-        passport = rotate_bound(passport,angle=-90)
-
-    print('Falsed')
     # Return false if the given picture is not a passport
-    return passport
+    return None
 
 
 def get_segment_crop(img,tol=0, mask=None):
@@ -426,14 +403,14 @@ def read_side(image):
 
     (h,w) = image.shape[:2]
 
-    side = image[:h//10,:]
+    side = image[:h//5,:]
 
     gray = cv2.cvtColor(side, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, 3)
     eroded = cv2.erode(blurred, (3,3), iterations=1)
     dilated = cv2.dilate(eroded, (3,3), iterations=1)
     ret, thresh = cv2.threshold(dilated,0,255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    text = image_to_string(thresh, lang='rus').replace('\n', ' ')
+    text = image_to_string(thresh)
 
     output = {'series': '', 'number': ''}
 
@@ -552,7 +529,17 @@ def parse_mrz(image):
 
 def analyze_passport(passport):
 
+
     image = passport.copy()
+    image = rotate_passport(image)
+
+    if image is None:
+        return {'Error': 'Not a Passport'}
+
+    image = cut_passport(image)
+    image = passport_border(image)
+
+
     (h,w) = image.shape[:2]
 
     top = image[0:h//2,:]
@@ -601,7 +588,7 @@ def analyze_passport(passport):
         image_cut['birth_date'] = bottom[3]
         ocr_result['birth_date'] = read_text(bottom[3], type_='number')
 
-        for line in bottom[4:]:
+        for line in bottom[3:]:
             image_cut['birth_place'].append(line)
             #print(read_text(line, type_='birth') + ' ')
             ocr_result['birth_place'] += read_text(line, type_='birth') + ' '
