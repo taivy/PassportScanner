@@ -163,7 +163,7 @@ def authority_text_boxes(image, boxes, rW, rH):
             mask[startY:endY,:] = 255
             mask_text_zones[startY:endY,startX:endX] = 255
 
-    cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    _, cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
 
     temp_masks = []
     authority = []
@@ -223,7 +223,7 @@ def name_text_boxes(image, boxes, rW, rH):
             mask[startY:endY,:] = 255
             mask_text_zones[startY:endY,startX:endX] = 255
 
-    cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    _, cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
 
     temp_masks = []
     text_boxes = []
