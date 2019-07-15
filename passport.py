@@ -1,12 +1,12 @@
 import cv2
 import os
 import re
-import sys
 import imutils
 from imutils.object_detection import non_max_suppression
 from imutils.contours import sort_contours
 import numpy as np
 from pytesseract import image_to_string
+from PIL import Image
 
 
 def passport_border(image):
@@ -61,12 +61,14 @@ def rotate_passport(passport):
     # Initializing cascade
     cascade = cv2.CascadeClassifier('cascade.xml')
     image = imutils.resize(passport.copy(), width=1000)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    except:
+        return None
 
     rotates = 0
     # Looking for a face
     for _ in range(4):
-
         face = cascade.detectMultiScale(gray, 1.3, 5)
 
         if face is not ():
@@ -161,7 +163,7 @@ def authority_text_boxes(image, boxes, rW, rH):
             mask[startY:endY,:] = 255
             mask_text_zones[startY:endY,startX:endX] = 255
 
-    img_cnt, cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
 
     temp_masks = []
     authority = []
@@ -206,7 +208,7 @@ def name_text_boxes(image, boxes, rW, rH):
     mask = np.zeros(image.shape[:2],dtype=np.uint8)
     mask_text_zones = np.zeros(image.shape[:2],dtype=np.uint8)
     (H,W) = image.shape[:2]
-
+    
     # loop over the bounding boxes
     for (startX, startY, endX, endY) in boxes:
         # scale the bounding box coordinates based on the respective
@@ -221,7 +223,7 @@ def name_text_boxes(image, boxes, rW, rH):
             mask[startY:endY,:] = 255
             mask_text_zones[startY:endY,startX:endX] = 255
 
-    img_cnt, cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
 
     temp_masks = []
     text_boxes = []
@@ -350,13 +352,14 @@ def locate_text(image):
 
 def read_text(roi, type_):
 
+    
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, 3)
     eroded = cv2.erode(blurred, (3,3), iterations=1)
     dilated = cv2.dilate(eroded, (3,3), iterations=1)
     ret, thresh = cv2.threshold(dilated,0,255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     text = image_to_string(thresh, lang='rus').replace('\n', ' ')
-
+    
     if type_ == 'auth':
 
         text = re.sub(r'[^А-Я\.\d -]+', '', text)
@@ -433,7 +436,7 @@ def locate_MRZ(image):
 
     image = imutils.resize(image, height=600)
     (h,w) = image.shape[:2]
-
+    
     kX = W / w
     kY = H / h
 
@@ -470,7 +473,7 @@ def locate_MRZ(image):
         (x, y, w, h) = cv2.boundingRect(c)
         ar = w / float(h)
         crWidth = w / float(gray.shape[1])
-
+        
         if ar > 5 and crWidth > 0.75:
 
             pX = int((x + w) * 0.03)
@@ -490,15 +493,23 @@ def parse_mrz(image):
 
     if mrz is None:
         return None
+    
+    try:
+        gray = cv2.cvtColor(mrz, cv2.COLOR_BGR2GRAY)
+    except:
+        return
+        
+    text = image_to_string(gray, lang='rus')
 
-    gray = cv2.cvtColor(mrz, cv2.COLOR_BGR2GRAY)
-
-    text = image_to_string(gray)
-
-    (top, bottom) = text.split('\n')
-    top = top.replace(' ', '')
-    bottom = bottom.replace(' ', '')
-
+    # filter empty
+    text = list(filter(lambda e: bool(e), text.split('\n')))
+    if len(text) >= 2:
+        (top, bottom) = text[0], text[-1]
+        top = top.replace(' ', '')
+        bottom = bottom.replace(' ', '')
+    else:
+        return None
+    
     words = [word for word in top.split('<') if len(word) >= 3]
     if len(words) >= 3:
         words = words[:3]
@@ -507,28 +518,46 @@ def parse_mrz(image):
     translit = {"L":"Л","O":"О","G":"Г","I":"И","N":"Н","V":"В","A":"А","E":"Е","R":"Р",\
                 "K":"К","S":"С","8":"Я","7":"Ю","3":"Ч","M":"М","Q":"Й","T":"Т","Z":"З",\
                 "Y":"у","F":"Ф","D":"Д","B":"Б",}
-
+    translit_keys = list(translit.keys())
+    
     mrz_result = {'surname': '', 'name': '', 'patronymic': '', \
                 'birth_date': '', 'issue_date': '', 'issue_code': '', 'number': '', 'series': '', 'sex': ''}
 
-    mrz_result['surname'] = ''.join([translit[letter] for letter in words[0]])
-    mrz_result['name'] = ''.join([translit[letter] for letter in words[1]])
-    mrz_result['patronymic'] = ''.join([translit[letter] for letter in words[2]])
-
-    mrz_result['birth_date'] = '{}.{}.19{}'.format(bottom[13:19][4:6], bottom[13:19][2:4], bottom[13:19][0:2])
+    for i, field in enumerate(['surname', 'name', 'patronymic'], 1):
+        if len(words) >= i:
+            mrz_result[field] = ''.join([translit[letter] if (letter in translit_keys) else letter for letter in words[i-1]])
+            
+    try:
+        mrz_result['birth_date'] = '{}.{}.19{}'.format(bottom[13:19][4:6], bottom[13:19][2:4], bottom[13:19][0:2])
+    except:
+        mrz_result['birth_date'] = ''
+    
     mrz_result['sex'] = 'male' if 'M' in bottom else 'female'
+    
+    try:
+        mrz_result['issue_date'] = '{}.{}.20{}'.format(bottom[-15:-9][4:6], bottom[-15:-9][2:4], bottom[-15:-9][0:2])
+    except:
+        mrz_result['issue_date'] = ''
+        
+    try:
+        mrz_result['issue_code'] = '{}-{}'.format(bottom[-9:-3][0:3], bottom[-9:-3][3:6])
+    except:
+        mrz_result['issue_code'] = ''
 
-    mrz_result['issue_date'] = '{}.{}.20{}'.format(bottom[-15:-9][4:6], bottom[-15:-9][2:4], bottom[-15:-9][0:2])
-    mrz_result['issue_code'] = '{}-{}'.format(bottom[-9:-3][0:3], bottom[-9:-3][3:6])
-
-    mrz_result['series'] = bottom[:2]
-    mrz_result['number'] = bottom[3:9]
-
+    try:
+        mrz_result['series'] = bottom[:2]
+    except:
+        mrz_result['series'] = ''
+    
+    try:
+        mrz_result['number'] = bottom[3:9]
+    except:
+        mrz_result['number'] = ''
+        
     return mrz_result
 
 
 def analyze_passport(passport):
-
 
     image = passport.copy()
     image = rotate_passport(image)
@@ -549,7 +578,7 @@ def analyze_passport(passport):
     bottom = image[h//2:h,w//3:w]
     boxes, (rW, rH) = locate_text(bottom)
     bottom = name_text_boxes(bottom, boxes, rW, rH)
-
+    
     image_cut = {'top': [], 'surname': np.ones((1,1), dtype=np.uint8), 'name': np.ones((1,1), dtype=np.uint8), \
                  'patronymic': np.ones((1,1), dtype=np.uint8), \
                  'birth_date': np.ones((1,1), dtype=np.uint8),'birth_place': []}
