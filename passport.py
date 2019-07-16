@@ -167,8 +167,12 @@ def authority_text_boxes(image, boxes, rW, rH):
 
     temp_masks = []
     authority = []
-
-    (cnts, boundingBoxes) = sort_contours(cnts, method='top-to-bottom')
+    
+    try:
+        (cnts, boundingBoxes) = sort_contours(cnts, method='top-to-bottom')
+    except:
+        return []
+        
     for k, (cnt, box)in enumerate(zip(cnts, boundingBoxes)):
 
         temp_mask = np.zeros(mask.shape[:2],dtype=np.uint8)
@@ -351,7 +355,8 @@ def locate_text(image):
 
 
 def read_text(roi, type_):
-
+    if not roi:
+        return ''
     
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, 3)
