@@ -10,18 +10,22 @@ from PIL import Image
 
 
 def passport_border(image):
-
-    # Initializing cascade
+    '''
+    Убирает границы паспорта
+    Параметры:
+    image - картинка (numpy array)
+    Возвращает картинку (numpy array)
+    '''
+    
     #image = cv2.imread(filename)
     #image = imutils.resize(image, width=1000)
     cascade = cv2.CascadeClassifier('cascade.xml')
     gray = cv2.cvtColor(image.copy(), cv2.COLOR_BGR2GRAY)
 
-    # Finding a face
+    # находим лицо
     face = cascade.detectMultiScale(gray, 1.3, 5)
 
     if face is not ():
-        # Cutting the image so only passport was left
         (x, y, w, h) = face[0]
 
         (H, W, _) = image.shape
@@ -53,12 +57,13 @@ def passport_border(image):
 
 def rotate_passport(passport):
     """
-    rotating an image so passport could be readed
-    :param image: np array
-    :return: np array
+    Поворачивает картинку в вертикальное положение
+    Параметры:
+    passport - картинка (numpy array)
+    Возвращает повернутую картинку (numpy array) или
+    None, если картинка не является паспортом (если не найдено лицо)
     """
 
-    # Initializing cascade
     cascade = cv2.CascadeClassifier('cascade.xml')
     image = imutils.resize(passport.copy(), width=1000)
     try:
@@ -67,8 +72,8 @@ def rotate_passport(passport):
         return None
 
     rotates = 0
-    # Looking for a face
     for _ in range(4):
+        # поворачиваем и ищем лицо, если находим - возвращаем картинку
         face = cascade.detectMultiScale(gray, 1.3, 5)
 
         if face is not ():
@@ -77,18 +82,36 @@ def rotate_passport(passport):
         gray = imutils.rotate_bound(gray, 90)
         rotates += 1
 
-    # Return false if the given picture is not a passport
     return None
 
 
 def get_segment_crop(img,tol=0, mask=None):
+    """
+    Возвращает часть картинки (numpy array), вырезанную по маске
+    Параметры:
+    img - картинка (numpy array)
+    tol - если маска не указана, то для вырезания используется данный
+    параметр. возвращается часть картинки, в которой пиксели имеют
+    значение больше tol
+    mask - черно-белая картинка (numpy array) с маской
+    имеет такие же размеры, как исходная картинка. вырезается часть
+    картинки, соответствующая белой части маски
+    """
+    
     if mask is None:
         mask = img > tol
+
     return img[np.ix_(mask.any(1), mask.any(0))]
 
 
 def cut_passport(image):
-
+    """
+    Вырезает паспорт из картинки
+    Параметры:
+    image - картинка (numpy array)
+    Возвращает картинку (numpy array) с вырезанным паспортом
+    """
+    
     image = image.copy()
     # image = imutils.resize(image, width=1000)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -144,7 +167,14 @@ def cut_passport(image):
 
 
 def authority_text_boxes(image, boxes, rW, rH):
-
+    '''
+    Возвращает список ROI (картинки в виде numpy массивов) в верхней части паспорта
+    Параметры:
+    image - картинка (numpy array)
+    boxes - 
+    rW, rH - отношение ширины и высоты к 320 (возвращаемое функцией locate_text)
+    '''
+    
     mask = np.zeros(image.shape[:2],dtype=np.uint8)
     mask_text_zones = np.zeros(image.shape[:2],dtype=np.uint8)
     (H,W) = image.shape[:2]
@@ -208,7 +238,14 @@ def authority_text_boxes(image, boxes, rW, rH):
 
 
 def name_text_boxes(image, boxes, rW, rH):
-
+    '''
+    Возвращает список ROI (картинки в виде numpy массивов) в нижней части паспорта
+    Параметры:
+    image - картинка (numpy array)
+    boxes - список из numpy массивов с 4-мя координатами ROI (возвращаемых функцией locate_text)
+    rW, rH - отношение ширины и высоты к 320 (возвращаемое функцией locate_text)
+    '''
+    
     mask = np.zeros(image.shape[:2],dtype=np.uint8)
     mask_text_zones = np.zeros(image.shape[:2],dtype=np.uint8)
     (H,W) = image.shape[:2]
@@ -278,7 +315,14 @@ def name_text_boxes(image, boxes, rW, rH):
 
 
 def locate_text(image):
-
+    '''
+    Ищет координаты ROI с текстом
+    Параметры:
+    image - картинка (numpy array)
+    Возвращает список координат ROI (numpy массивы из 4-х значений)
+    и кортеж (rW, rH) (отношение ширины и высоты к 320)
+    '''
+    
     orig = image.copy()
     (H, W) = image.shape[:2]
 
@@ -355,6 +399,15 @@ def locate_text(image):
 
 
 def read_text(roi, type_):
+    '''
+    Распознает текст с картинки
+    Параметры:
+    roi - картинка (numpy array)
+    type_ - строка типа текста (auth, birth, number, name)
+    тип определяет regex фильтры, применяемые к тексту
+    Возвращает текст
+    '''
+    
     if not roi:
         return ''
     
@@ -405,7 +458,13 @@ def read_text(roi, type_):
 
 
 def read_side(image):
-
+    '''
+    Распознает и считывает боковую сторону паспорта 
+    Параметры:
+    image - картинка (numpy array)
+    Возвращает словарь с series и number (серия и номер)
+    '''
+    
     image = image.copy()
     image = imutils.rotate_bound(image, angle=-90)
 
@@ -434,6 +493,12 @@ def read_side(image):
 
 
 def locate_MRZ(image):
+    '''
+    Ищет MRZ (machine readable zone)
+    Параметры:
+    image - картинка (numpy array)
+    Возвращает вырезанную из картинки область MRZ
+    '''
 
     image = image.copy()
     (H,W) = image.shape[:2]
@@ -493,6 +558,12 @@ def locate_MRZ(image):
 
 
 def parse_mrz(image):
+    '''
+    Парсит MRZ (machine readable zone)
+    Параметры:
+    image - картинка (numpy array)
+    Возвращает словарь с полями паспорта, извлеченными из MRZ
+    '''
 
     mrz = locate_MRZ(image)
 
@@ -563,6 +634,12 @@ def parse_mrz(image):
 
 
 def analyze_passport(passport):
+    '''
+    Анализирует паспорт
+    Параметры:
+    passport - картинка с паспортом
+    Возвращает словарь с результатами распознавания
+    '''
 
     image = passport.copy()
     image = rotate_passport(image)
