@@ -342,7 +342,10 @@ def locate_text(image):
     blob = cv2.dnn.blobFromImage(image, 1.0, (W, H),
                 (123.68, 116.78, 103.94), swapRB=True, crop=False)
     net.setInput(blob)
-    (scores, geometry) = net.forward(layerNames)
+    try:
+        (scores, geometry) = net.forward(layerNames)
+    except:
+        return None
 
     (numRows, numCols) = scores.shape[2:4]
     rects = []
@@ -654,11 +657,17 @@ def analyze_passport(passport):
     (h,w) = image.shape[:2]
 
     top = image[0:h//2,:]
-    boxes, (rW, rH) = locate_text(top)
+    res = locate_text(top)
+    if res is None:
+        return {'Error': 'Error processing top of the passport'}
+    boxes, (rW, rH) = res
     top = authority_text_boxes(top, boxes, rW, rH)
 
     bottom = image[h//2:h,w//3:w]
-    boxes, (rW, rH) = locate_text(bottom)
+    res = locate_text(bottom)
+    if res is None:
+        return {'Error': 'Error processing bottom of the passport'}
+    boxes, (rW, rH) = res
     bottom = name_text_boxes(bottom, boxes, rW, rH)
     
     image_cut = {'top': [], 'surname': np.ones((1,1), dtype=np.uint8), 'name': np.ones((1,1), dtype=np.uint8), \
