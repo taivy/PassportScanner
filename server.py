@@ -1,16 +1,15 @@
 from PIL import Image
-import imutils
-import cv2
 import numpy as np
 from flask import render_template, Flask, request, make_response
 import passport
 import json
-import os
-from pytesseract import image_to_string
+
 
 app = Flask(__name__)
 DEBUG = True
 
+# Для получения результатов распознавания отправить POST запрос на uploader
+# с файлом картинки
 
 @app.route('/')
 def index():
@@ -18,7 +17,6 @@ def index():
 
 @app.route('/uploader', methods=['GET', 'POST'])
 def upload_file():
-
     if request.method == 'POST':
 
         image = request.files['file']
@@ -28,11 +26,13 @@ def upload_file():
 
         return json.dumps(responce, ensure_ascii=False)
 
+
 def handle_passport(image):
     """
-    Function for full handling of passport image
-    :param image: np array
-    :return: dict
+    Обрабатывает картинку с паспортом
+    Параметры:
+    - image: картинка (numpy массив)
+    Возвращает словарь с результатами распознавания
     """
 
     responce = passport.analyze_passport(image.copy())
