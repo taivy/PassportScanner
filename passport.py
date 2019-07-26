@@ -410,10 +410,6 @@ def read_text(roi, type_):
     тип определяет regex фильтры, применяемые к тексту
     Возвращает текст
     '''
-    
-    if not roi:
-        return ''
-    
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, 3)
     eroded = cv2.erode(blurred, (3,3), iterations=1)
