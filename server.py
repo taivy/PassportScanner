@@ -1,9 +1,10 @@
 from PIL import Image
 import numpy as np
-from flask import render_template, Flask, request, make_response
+from flask import render_template, Flask, request
+from pdf2image import convert_from_bytes
 import passport
 import json
-
+import traceback
 
 app = Flask(__name__)
 DEBUG = True
@@ -19,12 +20,34 @@ def index():
 def upload_file():
     if request.method == 'POST':
 
-        image = request.files['file']
-        image = np.array(Image.open(image))
-
-        responce = handle_passport(image)
-
-        return json.dumps(responce, ensure_ascii=False)
+        f = request.files['file']
+        
+        try:
+            if f.filename.endswith('pdf'):
+                pages = convert_from_bytes(f.read())
+                result = []
+                for i, page in enumerate(pages):
+                    print("Page: ", i)
+                    try:
+                        #image = recurse_extract(page)
+                        image = np.array(page)
+                    except:
+                        traceback.print_exc()
+                        continue
+                    response = handle_passport(image)
+                    result.append(response)
+                    print(response)
+            else:
+                image = np.array(Image.open(f))
+                response = handle_passport(image)
+                print(response)
+                result = [response]
+            
+        except:
+            traceback.print_exc()
+            result = []
+            
+        return json.dumps(result, ensure_ascii=False)
 
 
 def handle_passport(image):

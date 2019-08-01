@@ -1,5 +1,4 @@
 import cv2
-import os
 import re
 import imutils
 from imutils.object_detection import non_max_suppression
@@ -7,6 +6,114 @@ from imutils.contours import sort_contours
 import numpy as np
 from pytesseract import image_to_string
 from PIL import Image
+from points_transform import four_point_transform
+
+
+DEBUG = False
+DEBUG_MRZ_ZONE = False
+SHOW_CUT = False
+DEBUG_TEXT_SKEW_CORRECTION = False
+SHOW_MRZ_CNTRS = False
+SHOW_CUT_THRESH = False
+SHOW_CUT_MASK = False
+SHOW_RAW_MRZ = False
+SHOW_SKEW_CORRECTION_ATTEMPTS = False
+trained_data_config = r'--tessdata-dir "./tessdata"'
+
+
+def skew_text_correction(image, type_=1):
+    ratio = image.shape[0] / 500.0
+    
+    orig = image.copy()
+    
+    if image.shape[1] > 1000:
+        image = imutils.resize(image, width=1000)
+    image = imutils.resize(image, height = 500)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    if type_ == 1:
+        gray = cv2.GaussianBlur(gray, (5,5), 0)
+        edged = cv2.Canny(gray, 10, 300)
+        
+    elif type_ == 2:
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        edged = cv2.Canny(gray, 0, 200)
+
+    elif type_ == 3:
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        edged = cv2.Canny(gray, 10, 100)
+
+    elif type_ == 4 or type_ == 5 or type_ == 7:
+        gray = cv2.GaussianBlur(gray, (5,3), 0)
+        edged = cv2.Canny(gray, 10, 80)
+        
+    elif type_ == 6:
+        gray = cv2.GaussianBlur(gray, (9,9), 0)
+        edged = cv2.Canny(gray, 5, 50)
+ 
+    elif type_ == 8:
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        edged = cv2.Canny(gray, 0, 40)
+
+    if type_ == 9:
+        gray = cv2.GaussianBlur(gray, (5,5), 0)
+        edged = cv2.Canny(gray, 10, 400)
+        
+    if type_ == 10:
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        edged = cv2.Canny(gray, 90, 250)
+        
+    if DEBUG_TEXT_SKEW_CORRECTION:
+        cv2.imshow('win', imutils.resize(edged.copy(), width=500))
+        cv2.waitKey(0)
+        
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS,(5,5))
+    dilated = cv2.dilate(edged,kernel,iterations = 1)
+    
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,10))
+    closed = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel)
+    
+    ret, thresh = cv2.threshold(closed, 0, 255, cv2.THRESH_BINARY_INV|cv2.THRESH_OTSU)
+
+    cnts = cv2.findContours(thresh.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[:5]
+
+    max_peri = 0
+    img_area = thresh.shape[0]*thresh.shape[1]
+    area_thresh = 5000
+    screenCnt = None
+    for c in cnts:
+    	area = cv2.contourArea(c)
+    	peri = cv2.arcLength(c,True)
+    	approx = cv2.approxPolyDP(c, 0.07*peri, True)
+    	if type_ == 5:
+    	    approx = cv2.approxPolyDP(c, 0.001*peri, True)
+    	elif type_ == 7:
+    	    approx = cv2.approxPolyDP(c, 0.09*peri, True)
+    	elif type_ == 10:
+    	    approx = cv2.approxPolyDP(c, 0.07*peri, True)
+    	cv2.drawContours(image, [approx], -1, (0, 255, 0), 2)
+    	if DEBUG_TEXT_SKEW_CORRECTION:
+    	    print(len(approx))
+    	if len(approx) == 4:
+    	    print(img_area - area)
+    	    if peri > max_peri and img_area - area > area_thresh:
+    		    max_peri = peri
+    		    screenCnt = approx
+                
+    if DEBUG_TEXT_SKEW_CORRECTION:
+        cv2.drawContours(image, cnts, -1, (0, 255, 0), 1)
+        cv2.imshow("win", image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    
+    if screenCnt is None:
+        return None
+    warped = four_point_transform(orig, screenCnt.reshape(4, 2) * ratio)
+    print("passed")
+    return warped
 
 
 def passport_border(image):
@@ -85,7 +192,7 @@ def rotate_passport(passport):
     return None
 
 
-def get_segment_crop(img,tol=0, mask=None):
+def get_segment_crop(img,tol=0, mask=None, border=False):
     """
     Возвращает часть картинки (numpy array), вырезанную по маске
     Параметры:
@@ -100,11 +207,29 @@ def get_segment_crop(img,tol=0, mask=None):
     
     if mask is None:
         mask = img > tol
+        
+    try:
+        if border:
+            ix = np.ix_(mask.any(1), mask.any(0))
+            
+            edge = 40
+            
+            ix0 = np.arange(ix[0][0][0]-edge, ix[0][-1][0]+edge)
+            ix1 = np.arange(ix[1][0][0]-edge, ix[1][0][-1]+edge)
 
-    return img[np.ix_(mask.any(1), mask.any(0))]
+            ix0 = ix0[(ix0[:]>0) & (ix0[:]< img.shape[0])]
+            ix1 = ix1[(ix1[:]>0) & (ix1[:]<img.shape[1])]
 
-
-def cut_passport(image):
+            ix0 = ix0.reshape(-1,1)
+            ix1 = ix1.reshape(1,-1)
+            
+            return img[[ix0, ix1]]
+        else:
+            return img[np.ix_(mask.any(1), mask.any(0))]
+    except:
+        raise
+    
+def cut_passport(image, type_='passport'):
     """
     Вырезает паспорт из картинки
     Параметры:
@@ -132,37 +257,38 @@ def cut_passport(image):
 
     blurred = cv2.GaussianBlur(opening, (1, 1), 0)
     thresh = cv2.threshold(opening, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-
+    
+    kernel = np.ones((2,2), dtype=np.uint8)
+    thresh = cv2.dilate(thresh, kernel, iterations=1)
+    
+    if SHOW_CUT_THRESH:
+        cv2.imshow('win', imutils.resize(thresh.copy(), width=1000))
+        cv2.waitKey(0)
+    
     (h, w) = thresh.shape
-    edgeH = int(h * 0.01)
-    edgeW = int(w * 0.01)
-    thresh[0:edgeH,0:w] = 255
-    thresh[h-edgeH:h,0:w] = 255
-    thresh[0:h,0:edgeW] = 255
-    thresh[0:h, w-edgeW:w] = 255
+    if type_=='passport':
+        edgeH = int(h * 0.01)
+        edgeW = int(w * 0.01)
+        thresh[0:edgeH,0:w] = 255
+        thresh[h-edgeH:h,0:w] = 255
+        thresh[0:h,0:edgeW] = 255
+        thresh[0:h, w-edgeW:w] = 255
+
 
     kernel = np.ones((20, 20), dtype=np.uint8)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
     inverse = cv2.bitwise_not(thresh)
+    
+    if SHOW_CUT_MASK and type_=='mrz':
+        cv2.imshow('win', imutils.resize(inverse.copy(), width=1000))
+        cv2.waitKey(0)
 
-    """
-    coords = np.column_stack(np.where(inverse > 0))
-    angle = cv2.minAreaRect(coords)[-1]
+    if type_=='mrz':
+        masked = get_segment_crop(image, mask=inverse, border=True)
+    else:
+        masked = get_segment_crop(image, mask=inverse)
 
-    if angle < -45:
-        angle = -(90 + angle)
-
-    image = rotate_bound(image,angle=angle)
-    inverse = rotate_bound(inverse,angle=angle)"""
-
-    masked = get_segment_crop(image, mask=inverse)
-    """
-    if not os.path.exists('output1'):
-        os.mkdir('output1')
-
-    cv2.imwrite(os.path.join('output1', output + '.png'), masked)
-    """
     return masked
 
 
@@ -202,7 +328,7 @@ def authority_text_boxes(image, boxes, rW, rH):
         (cnts, boundingBoxes) = sort_contours(cnts, method='top-to-bottom')
     except:
         return []
-        
+    
     for k, (cnt, box)in enumerate(zip(cnts, boundingBoxes)):
 
         temp_mask = np.zeros(mask.shape[:2],dtype=np.uint8)
@@ -250,6 +376,10 @@ def name_text_boxes(image, boxes, rW, rH):
     mask_text_zones = np.zeros(image.shape[:2],dtype=np.uint8)
     (H,W) = image.shape[:2]
     
+    if DEBUG:
+        cv2.imshow('win', image)
+        cv2.waitKey(0)
+
     # loop over the bounding boxes
     for (startX, startY, endX, endY) in boxes:
         # scale the bounding box coordinates based on the respective
@@ -268,7 +398,11 @@ def name_text_boxes(image, boxes, rW, rH):
 
     temp_masks = []
     text_boxes = []
-
+    
+    if not cnts:
+        print("No contours found")
+        return None
+    
     (cnts, boundingBoxes) = sort_contours(cnts, method='top-to-bottom')
     for k, (cnt, box)in enumerate(zip(cnts, boundingBoxes)):
 
@@ -320,7 +454,7 @@ def locate_text(image):
     Параметры:
     image - картинка (numpy array)
     Возвращает список координат ROI (numpy массивы из 4-х значений)
-    и кортеж (rW, rH) (отношение ширины и высоты к 320)
+    и кортеж (rW, rH) (отношение ширины и высоты к 320) или None
     '''
     
     orig = image.copy()
@@ -401,7 +535,7 @@ def locate_text(image):
     return boxes, (rW, rH)
 
 
-def read_text(roi, type_):
+def read_text(roi, type_):    
     '''
     Распознает текст с картинки
     Параметры:
@@ -410,12 +544,18 @@ def read_text(roi, type_):
     тип определяет regex фильтры, применяемые к тексту
     Возвращает текст
     '''
+    
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, 3)
     eroded = cv2.erode(blurred, (3,3), iterations=1)
     dilated = cv2.dilate(eroded, (3,3), iterations=1)
     ret, thresh = cv2.threshold(dilated,0,255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     text = image_to_string(thresh, lang='rus').replace('\n', ' ')
+    
+    if DEBUG:
+        cv2.imshow('win', thresh)
+        cv2.waitKey(0)
+        print(text)
     
     if type_ == 'auth':
 
@@ -498,7 +638,7 @@ def locate_MRZ(image):
     image - картинка (numpy array)
     Возвращает вырезанную из картинки область MRZ
     '''
-
+    
     image = image.copy()
     (H,W) = image.shape[:2]
     orig = image.copy()
@@ -528,33 +668,49 @@ def locate_MRZ(image):
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, sqKernel)
     thresh = cv2.erode(thresh, None, iterations=4)
 
+    rectKernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 13))
+    thresh = cv2.erode(thresh, None, iterations=3)
+
     p = int(image.shape[1] * 0.05)
     thresh[:, 0:p] = 0
     thresh[:, image.shape[1] - p:] = 0
+
+    if DEBUG_MRZ_ZONE:
+        cv2.imshow('win', thresh)
+        cv2.waitKey(0)
 
     cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
     cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
 
+    image_copy = image.copy()
+    
     for c in cnts:
 
         (x, y, w, h) = cv2.boundingRect(c)
         ar = w / float(h)
         crWidth = w / float(gray.shape[1])
         
+        cv2.rectangle(image_copy, (x, y), (x+w, y+h), (255,0,0), 2)
         if ar > 5 and crWidth > 0.75:
-
             pX = int((x + w) * 0.03)
             pY = int((y + h) * 0.03)
+
             (x, y) = (x - pX, y - pY)
             (w, h) = (w + (pX * 2), h + (pY * 2))
-
+            
+            cv2.rectangle(image_copy, (x, y), (x+w, y+h), (0,255,0), 2)
             roi = image[y:y + h, x:x + w].copy()
             roi = orig[int(y*kY):int(y*kY + h*kY), int(x*kX):int((x+w)*kX)].copy()
 
+            roi = cut_passport(roi, type_='mrz')
             return roi
-
+    if SHOW_MRZ_CNTRS:
+        cv2.imshow('win', image_copy)
+        cv2.waitKey(0)
+        cv2.imshow('win', roi)
+        cv2.waitKey(0)
 
 def parse_mrz(image):
     '''
@@ -573,11 +729,24 @@ def parse_mrz(image):
         gray = cv2.cvtColor(mrz, cv2.COLOR_BGR2GRAY)
     except:
         return
-        
-    text = image_to_string(gray, lang='rus')
+
+    if gray.shape[1] > 1000:
+        gray = imutils.resize(gray.copy(), width=1000)
+    
+    if DEBUG:
+        cv2.imshow('win', gray)
+        cv2.waitKey(0)
+        print('read_text')
+
+    text = image_to_string(gray, lang='ocrb', config=trained_data_config)
 
     # filter empty
     text = list(filter(lambda e: bool(e), text.split('\n')))
+    
+    if SHOW_RAW_MRZ:
+        print('TEXT:')
+        print(text)
+        
     if len(text) >= 2:
         (top, bottom) = text[0], text[-1]
         top = top.replace(' ', '')
@@ -590,9 +759,13 @@ def parse_mrz(image):
         words = words[:3]
         words[0] = words[0][5:]
 
-    translit = {"L":"Л","O":"О","G":"Г","I":"И","N":"Н","V":"В","A":"А","E":"Е","R":"Р",\
-                "K":"К","S":"С","8":"Я","7":"Ю","3":"Ч","M":"М","Q":"Й","T":"Т","Z":"З",\
-                "Y":"у","F":"Ф","D":"Д","B":"Б",}
+
+    translit = {"A":"А","B":"Б","V":"В","G":"Г","D":"Д","E":"Е","2":"Ё","J":"Ж",
+                "Z":"З","I":"И","Q":"Й","K":"К","L":"Л","M":"М","N":"Н","O":"О",
+                "P":"П","R":"Р","S":"С","T":"Т","U":"У","F":"Ф",
+                "H":"Х","C":"Ц","3":"Ч","4":"Ш","W":"Щ","X":"Ъ","Y":"Ы",
+                "9":"Ь","6":"Э","7":"Ю","8":"Я"}
+    
     translit_keys = list(translit.keys())
     
     mrz_result = {'surname': '', 'name': '', 'patronymic': '', \
@@ -639,17 +812,46 @@ def analyze_passport(passport):
     passport - картинка с паспортом
     Возвращает словарь с результатами распознавания
     '''
-
+    
     image = passport.copy()
     image = rotate_passport(image)
 
     if image is None:
         return {'Error': 'Not a Passport'}
-
-    image = cut_passport(image)
-    image = passport_border(image)
-
-
+    
+    image_cut = None
+    for type_ in [2,3,1,4,5,6,7,8,9,10]:
+        image_cut_ = skew_text_correction(image, type_=type_)
+        if SHOW_SKEW_CORRECTION_ATTEMPTS:
+            if image_cut is not None:
+                cv2.imshow('win', imutils.resize(image_cut, width=500))
+                cv2.waitKey(0)
+        if image_cut is not None and image_cut.shape[0] > 1000 and \
+        image_cut.shape[0] / image_cut.shape[1] > 1.3:
+            print("!!!!!!!")
+            print(image_cut.shape[0])
+            print(image.shape[0])
+            print(image_cut.shape[0] / image_cut.shape[1] > 1.3)
+            image_cut = image_cut_
+            break
+    #image_cut=None
+    
+    if SHOW_CUT and image_cut is not None:
+        cv2.imshow('win', imutils.resize(image_cut, width=500))
+        cv2.waitKey(0)
+        
+    # если неправильно вырезали, то вырезаем другим методом
+    if image_cut is None:
+        print("Cut in another way")
+        #image_cut = cut_passport(image, type_='mrz')
+        image_cut = cut_passport(image)
+        
+        if SHOW_CUT:
+            cv2.imshow('Output', imutils.resize(image_cut, width=500))
+            cv2.waitKey(0)
+     
+    image = passport_border(image_cut)
+    
     (h,w) = image.shape[:2]
 
     top = image[0:h//2,:]
@@ -687,8 +889,7 @@ def analyze_passport(passport):
         if issue_code is not None:
             ocr_result['issue_code'] = issue_code[0]
 
-
-    if len(bottom) > 3:
+    if bottom is not None and len(bottom) > 3:
 
         image_cut['surname'] = bottom[0]
         image_cut['name'] = bottom[1]
@@ -699,22 +900,27 @@ def analyze_passport(passport):
         ocr_result['patronymic'] = read_text(bottom[2], type_='name').upper()
 
 
-    if len(bottom) > 4:
+    if bottom is not None and len(bottom) > 4:
 
         image_cut['birth_date'] = bottom[3]
         ocr_result['birth_date'] = read_text(bottom[3], type_='number')
 
         for line in bottom[3:]:
             image_cut['birth_place'].append(line)
-            #print(read_text(line, type_='birth') + ' ')
             ocr_result['birth_place'] += read_text(line, type_='birth') + ' '
 
     ocr_result.update(read_side(image))
 
     result = {'ocr_result': ocr_result, 'cut': image_cut}
-
+    
     mrz = parse_mrz(image)
-
+    
+    '''
+    if mrz is not None:
+        for key, value in mrz.items():
+            result['ocr_result']['mrz_' + key] = value
+    '''
+    
     if mrz is not None:
         result['ocr_result']['mrz'] = mrz
 
